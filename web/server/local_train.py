@@ -53,11 +53,15 @@ def build_local_config(ws_address: str, train_overrides: Optional[dict[str, Any]
 
     config = OmegaConf.load(ENGINE_CONFIG)
 
-    # Point every StreamWrapper (across all wrapper sets) at the local server.
+    # Point every StreamWrapper (across all wrapper sets) at the local server,
+    # and upload more often than the public-map default (500 steps) so the
+    # dashboard shows first dots quickly — on CPU each env only steps ~10x/s,
+    # so 500 steps meant several minutes of blank map after boot.
     for wrapper_set in config.wrappers.values():
         for entry in wrapper_set:
             if STREAM_WRAPPER_KEY in entry:
                 entry[STREAM_WRAPPER_KEY]["ws_address"] = ws_address
+                entry[STREAM_WRAPPER_KEY]["upload_interval"] = 150
 
     for key, value in (train_overrides or {}).items():
         if value is None:

@@ -21,6 +21,9 @@ let regions = null; // map_n -> {coordinates: [x, y]}
 const agents = new Map(); // agent key -> {color, points: [{gx, gy, t}]}
 let batches = 0;
 let lastBatchAt = null; // ms timestamp of the last received batch
+// Active-run info mirrored from /api/train/status polling, so the stats line
+// can distinguish "envs still booting" from "pipeline gone quiet".
+let trainInfo = { running: false, startedAt: null };
 
 // px per tile, computed once the image loads
 let scaleX = 1;
@@ -73,11 +76,16 @@ function handleBatch(msg) {
 
 function updateStats() {
   let text = `${agents.size} agents · ${batches} batches`;
-  if (lastBatchAt) {
+  const noDataFromRun =
+    trainInfo.running && trainInfo.startedAt && (!lastBatchAt || lastBatchAt < trainInfo.startedAt);
+  if (noDataFromRun) {
+    // Booting all the emulators takes a few minutes on CPU before the first
+    // coordinates arrive — say so instead of showing a silently blank map.
+    const bootAge = Math.round((Date.now() - trainInfo.startedAt) / 1000);
+    text += ` · warming up (${bootAge}s) — envs booting, first dots in a few minutes`;
+  } else if (lastBatchAt) {
     const age = Math.round((Date.now() - lastBatchAt) / 1000);
-    // Envs upload every 500 steps, so gaps of a couple of minutes are normal
-    // during startup/compile; surface the age instead of a blank map.
-    text += age < 15 ? " · live data" : ` · last data ${age}s ago`;
+    text += age < 30 ? " · live data" : ` · last data ${age}s ago`;
   }
   statsEl.textContent = text;
 }
@@ -308,6 +316,10 @@ function setupTrainControls() {
     try {
       const res = await fetch("/api/train/status");
       const status = await res.json();
+      trainInfo = {
+        running: !!status.running,
+        startedAt: status.started_at ? Date.parse(status.started_at) : null,
+      };
       syncFormToRun(status);
       render(status);
       // When the run state flips, refresh the history panel.

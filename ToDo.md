@@ -3,28 +3,62 @@
 ## Phase 0 — Foundation
 - [x] Verify Python 3.10/3.11 venv and `pip install -e ../pokemonred_puffer` — done 2026-07-05: Python 3.11.15 (pyenv) venv at `.venv/`, pufferlib 1.0.1 fork built OK, pyboy 2.7.0, torch 2.12.1. Note: the editable install doesn't expose the package (upstream `packages.find` config), so all engine commands must run with `cwd=../pokemonred_puffer`.
 - [x] Place/verify ROM: `red.gb` (sha1 `ea9bcae617fdf159b045185467ae58b2e4a48b9a`) copied from `PokemonRed.gb` into `../pokemonred_puffer`
-- [x] Short training run confirmed end to end (4 envs, serial, CPU): 4.1k agent steps, 4 PPO epochs, ~340 SPS, 4.3M-param model, clean exit. macOS caveat: `--vectorization multiprocessing` crashes (spawn can't pickle the env-creator closure) — use `serial` on Mac or patch the trainer to fork.
-- [ ] Fix/patch multiprocessing on macOS (fork start method or module-level env creator) so training can scale past serial
-- [ ] Run `python -m pokemonred_puffer.train autotune` after the multiprocessing fix and record the recommended `num_envs` for this machine
-- [ ] Scaffold `web/server` (FastAPI + uvicorn) and `web/frontend` (Vite + TypeScript)
-- [ ] Decide frontend framework (React vs Svelte) and charting lib (uPlot vs Chart.js)
+- [x] Short training run confirmed end to end (4 envs, serial, CPU): 4.1k agent steps, 4 PPO epochs, ~340 SPS, 4.3M-param model, clean exit.
+- [x] Fix multiprocessing on macOS — done 2026-07-05. Root cause was NOT the pickle error (the engine forces the `fork` start method on darwin in `train.py`, which avoids that); it was the macOS ObjC fork-safety crash (`+[Swift.__SharedStringStorage initialize] ... Crashing instead`). Fix: launch with `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` via `train_macos.sh` (repo root) or `web/server/local_train.py`. Also required `train.device: cpu` (no CUDA on Mac) and disabling `early_stop` (its wall-clock limits assume a fast GPU run and would kill CPU training at ~30 min).
+- [x] Ran `autotune` on this M4 (2026-07-05, idle machine): env-stepping throughput peaks at ~4,370 SPS with **num_envs: 120 / num_workers: 10** (env_batch_size 36 is valid: 36 % (120/10) == 0). Higher env counts regress (180→3.1k, 360→2.9k); throughput scales with workers up to the 10-core count. (An earlier contended run peaked at 90 envs / ~3,571 SPS; on an idle machine 120 wins by ~6%.) Applied to engine `config.yaml` (stock 288/24 was a GPU-box config). Note: autotune SPS is raw env stepping (empty wrappers, no NN); real training SPS is lower but the optimal counts hold. Optional cpu-vs-mps A/B still open (mps likely marginal — emulator-bound, tiny 4.3M net).
+- [x] Scaffold `web/server` (FastAPI + uvicorn) and `web/frontend` — server (`app.py`) + vanilla-TS frontend built and running.
+- [x] Decide frontend framework — went with **no-framework vanilla JS + Canvas** for the live map (zero build step, direct canvas control). Revisit React/Svelte + uPlot if the metrics/run-control views (Phase 2/3) need it.
 
 ## Phase 1 — Telemetry pipeline
-- [ ] FastAPI WebSocket `/broadcast` ingest endpoint (accepts existing StreamWrapper JSON: `{metadata, coords}`)
-- [ ] `/live` fan-out WebSocket for browser subscribers, tagged by run id
-- [ ] Config overlay that sets `stream_wrapper.StreamWrapper` `ws_address` → `ws://localhost:8000/broadcast`
-- [ ] Frontend live map: render `kanto_map_dsv.png`, convert `(x, y, map_n)` → global pixels via `map_data.json` (port logic from `global_map.py` / pokerl-map-viz)
-- [ ] Per-env colored trails with fade; zoom/pan
-- [ ] Milestone: watch a live local training run in the browser
+- [x] FastAPI WebSocket `/broadcast` ingest endpoint (accepts existing StreamWrapper JSON: `{metadata, coords}`) — verified 2026-07-05: 22 batches ingested from a live CPU run.
+- [x] `/live` fan-out WebSocket for browser subscribers, with a replay ring buffer so late joiners see trails — verified: subscriber received 500-coord batches.
+- [x] Config overlay that sets `stream_wrapper.StreamWrapper` `ws_address` → `ws://localhost:8000/broadcast` — done via `web/server/local_train.py` (loads engine config, overlays ws_address on every wrapper set + optional device/num_envs, writes a merged run config, launches with the fork-safety env var). Engine repo left untouched.
+- [x] Frontend live map: render `kanto_map_dsv.png`, convert `(x, y, map_n)` → global pixels via `map_data.json` — `app.js` mapping verified to match engine `global_map.py` (gx = x + map_x + PAD, gy = y + map_y + PAD).
+- [x] Per-env colored trails with fade; zoom/pan — implemented in `app.js` (TTL fade, hashed per-agent colors, cursor-anchored zoom).
+- [~] Milestone: watch a live local training run in the browser — full data path verified programmatically (env → /broadcast → /live → mapping). Still needs a human eyeball on the rendered canvas to fully close.
+
+### How to run the live pipeline
+
+Terminal 1 — telemetry server + dashboard at http://localhost:8000:
+```sh
+.venv/bin/uvicorn web.server.app:app --port 8000
+```
+Terminal 2 — training that streams to the local server (add `--debug` for a quick single-env run):
+```sh
+.venv/bin/python -m web.server.local_train train
+```
 
 ## Phase 2 — Run control
-- [ ] Run registry (SQLite): id, config snapshot, PID, status, checkpoint dir
-- [ ] `POST /runs` — write merged config to run dir, spawn trainer subprocess (`cwd=../pokemonred_puffer`)
-- [ ] `DELETE /runs/{id}` — SIGTERM for graceful checkpoint-and-exit; hard kill fallback
-- [ ] Resume-from-checkpoint endpoint
-- [ ] Config form UI generated from `config.yaml` (env flags, reward weights, train hyperparams)
-- [ ] Live stdout/stderr log tail in the UI
-- [ ] Milestone: full train lifecycle without a terminal
+- [x] **One-click Train / Stop from the browser** — `web/server/runner.py` `RunManager` spawns the
+      trainer subprocess (config overlay + fork-safety env var, `cwd=../pokemonred_puffer`) and
+      stops it via SIGTERM→SIGKILL on the process group (kills forked workers, no orphans).
+      Endpoints: `POST /api/train/start`, `POST /api/train/stop`, `GET /api/train/status`.
+      Frontend: Train/Stop button + status in the header. Verified end-to-end 2026-07-05
+      (start → running pid, graceful stop returncode -15, 0 orphans).
+- [x] Live stdout/stderr log tail in the UI — captured per run under `web/server/.runs/<id>/train.log`,
+      surfaced via `status().log` and a toggle-able log panel in the dashboard.
+- [x] SQLite run registry (`web/server/registry.py`): one row per run — id, command, params,
+      status (running/stopped/exited/failed), started/ended, returncode, log path, and the engine
+      checkpoint dir (`exp_id`, discovered best-effort by watching `../pokemonred_puffer/runs/`).
+      `RunManager` records start/stop and reconciles natural exits. Endpoints `GET /api/runs`,
+      `GET /api/runs/{id}`; a **runs history drawer** in the UI. Verified: run recorded while
+      running, persisted as `stopped` with returncode after stop.
+      (Still single active run — concurrent/queued runs would build on this.)
+- [x] Config form UI — a **launch-settings drawer** (device, an **instances slider 1–12
+      defaulting to 12**, total_timesteps, wrappers set, reward set, debug), pre-filled from
+      `GET /api/config/defaults`. The instances slider drives num_workers and `derive_env_layout`
+      computes a *valid* env trio (num_envs = instances×12, env_batch_size = num_envs) that always
+      satisfies the engine's divisibility rules (num_envs % workers == 0, batch % (envs/worker) == 0)
+      — a free worker count against the fixed 120/36 would otherwise be invalid for most values.
+      Values flow through `build_local_config` (train overrides) + CLI args (`-w`/`-r`). Verified for
+      all 1–12 and end-to-end (instances=2 → 24 envs/2 workers/batch 24, graceful stop, no orphans).
+      (Curated high-value knobs, not every env flag / reward weight — those can be added later.)
+- [ ] Resume-from-checkpoint — **blocked by engine design**: `setup()` generates a fresh
+      `exp_id` (uuid) every run and `train()` never loads a prior model (only the `evaluate`/rollout
+      path takes `model_path`). True resume needs an engine patch (reuse a run's `exp_id` dir + load
+      its `model_*.pt` into the policy), which conflicts with keeping the engine untouched. Deferred.
+- [x] Milestone: **full train lifecycle without a terminal** — configure, start, watch (map + log),
+      stop, and review history all from the page.
 
 ## Phase 3 — Metrics & screens
 - [ ] Spike: parse wandb offline dir vs tensorboard event files; pick one

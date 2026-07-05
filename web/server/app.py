@@ -17,6 +17,9 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from .runner import RunManager
 
 REPO_DIR = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = REPO_DIR / "web" / "frontend"
@@ -36,6 +39,14 @@ app = FastAPI(title="pokerl-web telemetry")
 
 live_clients: set[WebSocket] = set()
 replay: deque[str] = deque(maxlen=REPLAY_SIZE)
+runs = RunManager()
+
+
+@app.on_event("shutdown")
+def _stop_training_on_shutdown() -> None:
+    # Don't orphan a training subprocess if the server is stopped.
+    if runs.is_running():
+        runs.stop()
 
 
 async def fan_out(message: str) -> None:
@@ -96,6 +107,82 @@ async def kanto_map() -> FileResponse:
 @app.get("/api/map-data")
 async def map_data() -> FileResponse:
     return FileResponse(MAP_DATA)
+
+
+# --- training run control (one-click Train / Stop) -------------------------
+
+
+class StartRequest(BaseModel):
+    command: str = "train"
+    device: str | None = None
+    instances: int | None = None
+    num_envs: int | None = None
+    num_workers: int | None = None
+    env_batch_size: int | None = None
+    total_timesteps: int | None = None
+    wrappers_name: str | None = None
+    reward_name: str | None = None
+    debug: bool = False
+
+
+@app.get("/api/config/defaults")
+async def config_defaults() -> dict:
+    """Current engine config values + choices, to populate the launch form."""
+    from omegaconf import OmegaConf
+
+    from .local_train import ENGINE_CONFIG
+
+    cfg = OmegaConf.load(ENGINE_CONFIG)
+    return {
+        "device": cfg.train.get("device"),
+        "num_envs": cfg.train.get("num_envs"),
+        "num_workers": cfg.train.get("num_workers"),
+        "total_timesteps": cfg.train.get("total_timesteps"),
+        "wrappers": list(cfg.wrappers.keys()),
+        "rewards": list(cfg.rewards.keys()),
+        "default_wrappers_name": "stream_only",
+        "default_reward_name": "baseline.ObjectRewardRequiredEventsMapIdsFieldMoves",
+    }
+
+
+@app.get("/api/train/status")
+async def train_status() -> dict:
+    return runs.status()
+
+
+@app.post("/api/train/start")
+async def train_start(req: StartRequest) -> dict:
+    try:
+        return runs.start(
+            command=req.command,
+            device=req.device,
+            instances=req.instances,
+            num_envs=req.num_envs,
+            num_workers=req.num_workers,
+            env_batch_size=req.env_batch_size,
+            total_timesteps=req.total_timesteps,
+            wrappers_name=req.wrappers_name,
+            reward_name=req.reward_name,
+            debug=req.debug,
+        )
+    except (RuntimeError, ValueError) as exc:
+        return {"error": str(exc), **runs.status()}
+
+
+@app.post("/api/train/stop")
+async def train_stop() -> dict:
+    return runs.stop()
+
+
+@app.get("/api/runs")
+async def list_runs(limit: int = 50) -> dict:
+    return {"runs": runs.registry.list_runs(limit)}
+
+
+@app.get("/api/runs/{run_id}")
+async def get_run(run_id: str) -> dict:
+    record = runs.registry.get_run(run_id)
+    return record or {"error": "run not found"}
 
 
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

@@ -26,6 +26,9 @@ python -m pokemonred_puffer.train autotune   # find num_envs first
 python -m pokemonred_puffer.train train
 python -m pokemonred_puffer.train --config config.yaml --debug  # quick test
 
+# On macOS, launch via the wrapper instead (sets the fork-safety env var):
+./train_macos.sh train          # ./train_macos.sh {train|autotune|...} [flags]
+
 # Legacy SB3 training (from v2/; needs ../PokemonRed.gb)
 python baseline_fast_v2.py
 ```
@@ -36,7 +39,7 @@ python baseline_fast_v2.py
 - **Python**: engine requires `>=3.10,<3.12`. macOS needs SDL and has its own requirements file for v2 (`v2/macos_requirements.txt`).
 - **Training cannot run in-browser.** Anything "browser" means the dashboard/telemetry layer or the ONNX inference demo — do not attempt Pyodide/WASM training.
 - **StreamWrapper default endpoint** is the public `wss://transdimensional.xyz/broadcast` (shared community map). Local web-UI work must repoint it to the local server via config, not by editing the public default.
-- **macOS multiprocessing**: `--vectorization multiprocessing` fails on macOS (`Can't pickle local object 'make_env_creator.<locals>.env_creator'` — spawn start method can't pickle the closure). Use `--vectorization serial` on Mac, or patch the trainer to use fork/a module-level creator. Verified 2026-07-05 with Python 3.11.15, pufferlib 1.0.1.
+- **macOS training launch**: the engine forces the `fork` start method on darwin (`train.py`), which avoids the old spawn/pickle error but crashes worker processes once torch/PyBoy/SDL have initialized the ObjC runtime (`+[Swift.__SharedStringStorage initialize] ... Crashing instead`; dashboard stays at SPS 0). Fix: `export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` before launching. Use **`./train_macos.sh`** (repo root), which sets that env var and runs the engine — pass the same subcommands/flags (`./train_macos.sh train`, `./train_macos.sh train --debug`). Separately, the engine's `config.yaml` must set `train.device: cpu` (or `mps`) on Mac; `cuda` raises `AssertionError: Torch not compiled with CUDA enabled`. Verified 2026-07-05 with Python 3.11.15 (SPS ~27 on cpu via `--debug`).
 - Memory addresses for game state live in `baselines/memory_addresses.py` and in the engine's `environment.py`; coordinate mapping in `global_map.py` + `map_data.json` (duplicated in both repos — keep in sync if touched).
 - Session output dirs (`session_*`, `runs/`) and checkpoints are large; never commit them.
 

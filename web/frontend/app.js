@@ -144,6 +144,174 @@ function connect() {
   };
 }
 
+// --- training run control ---------------------------------------------------
+
+function $(id) { return document.getElementById(id); }
+
+const ENVS_PER_WORKER = 12; // mirrors server derive_env_layout
+
+function updateInstancesHint() {
+  const n = parseInt($("cfg-instances").value, 10);
+  $("cfg-instances-val").textContent = n;
+  $("cfg-instances-hint").textContent = `→ ${n * ENVS_PER_WORKER} environments (${ENVS_PER_WORKER}/worker). 10 is the autotuned sweet spot on this M4.`;
+}
+
+async function loadConfigDefaults() {
+  updateInstancesHint();
+  $("cfg-instances").addEventListener("input", updateInstancesHint);
+  let d;
+  try {
+    d = await (await fetch("/api/config/defaults")).json();
+  } catch { return; }
+  if (d.device) $("cfg-device").value = d.device;
+  if (d.total_timesteps != null) $("cfg-total-timesteps").value = d.total_timesteps;
+  const wrapSel = $("cfg-wrappers");
+  wrapSel.innerHTML = "";
+  for (const w of d.wrappers || []) {
+    const o = document.createElement("option");
+    o.value = o.textContent = w;
+    if (w === d.default_wrappers_name) o.selected = true;
+    wrapSel.appendChild(o);
+  }
+  const rewSel = $("cfg-reward");
+  rewSel.innerHTML = "";
+  for (const r of d.rewards || []) {
+    const o = document.createElement("option");
+    o.value = o.textContent = r;
+    if (r === d.default_reward_name) o.selected = true;
+    rewSel.appendChild(o);
+  }
+}
+
+function collectStartOptions() {
+  const num = (id) => { const v = parseInt($(id).value, 10); return Number.isFinite(v) ? v : null; };
+  return {
+    device: $("cfg-device").value || null,
+    instances: num("cfg-instances"),
+    total_timesteps: num("cfg-total-timesteps"),
+    wrappers_name: $("cfg-wrappers").value || null,
+    reward_name: $("cfg-reward").value || null,
+    debug: $("cfg-debug").checked,
+  };
+}
+
+function statusClass(s) {
+  return ["running", "stopped", "exited", "failed"].includes(s) ? s : "";
+}
+
+async function refreshRuns() {
+  const panel = $("runs-panel");
+  if (!panel.classList.contains("open")) return;
+  let data;
+  try { data = await (await fetch("/api/runs")).json(); } catch { return; }
+  const list = $("run-list");
+  list.innerHTML = "";
+  for (const r of data.runs || []) {
+    const li = document.createElement("li");
+    const params = Object.entries(r.params || {}).map(([k, v]) => `${k}=${v}`).join(" ");
+    li.innerHTML =
+      `<span class="run-status ${statusClass(r.status)}">${r.status}</span>` +
+      `<span class="run-id">${r.id}</span>` +
+      `<div class="run-meta">${r.command}${params ? " · " + params : ""}</div>` +
+      (r.exp_id ? `<div class="run-meta">ckpt: ${r.exp_id}</div>` : "");
+    list.appendChild(li);
+  }
+}
+
+function setupDrawers() {
+  const pairs = [["config-toggle", "config-panel"], ["runs-toggle", "runs-panel"]];
+  for (const [btnId, panelId] of pairs) {
+    $(btnId).addEventListener("click", () => {
+      const panel = $(panelId);
+      // Close the other drawer so they don't overlap.
+      for (const [, otherId] of pairs) if (otherId !== panelId) $(otherId).classList.remove("open");
+      panel.classList.toggle("open");
+      $(btnId).style.background = panel.classList.contains("open") ? "var(--accent)" : "#30363d";
+      if (panelId === "runs-panel") refreshRuns();
+    });
+  }
+}
+
+function setupTrainControls() {
+  const btn = document.getElementById("train-btn");
+  const stateEl = document.getElementById("train-state");
+  const logToggle = document.getElementById("log-toggle");
+  const logEl = document.getElementById("log");
+  let running = false;
+  let busy = false;
+
+  function render(status) {
+    running = !!status.running;
+    btn.textContent = running ? "Stop" : "Train";
+    btn.classList.toggle("stop", running);
+    btn.disabled = busy;
+    if (busy) {
+      stateEl.textContent = running ? "stopping…" : "starting…";
+    } else if (running) {
+      const up = status.uptime_seconds ?? 0;
+      stateEl.textContent = `running · ${Math.floor(up / 60)}m${Math.floor(up % 60)}s`;
+    } else if (status.returncode != null) {
+      stateEl.textContent = `exited (${status.returncode})`;
+    } else {
+      stateEl.textContent = "idle";
+    }
+    if (logEl.classList.contains("open") && Array.isArray(status.log)) {
+      const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+      logEl.textContent = status.log.join("\n");
+      if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+    }
+  }
+
+  let lastRunning = null;
+
+  async function refresh() {
+    try {
+      const res = await fetch("/api/train/status");
+      const status = await res.json();
+      render(status);
+      // When the run state flips, refresh the history panel.
+      if (status.running !== lastRunning) {
+        lastRunning = status.running;
+        refreshRuns();
+      }
+    } catch { /* server down; leave last state */ }
+  }
+
+  btn.addEventListener("click", async () => {
+    busy = true;
+    render({ running });
+    try {
+      const path = running ? "/api/train/stop" : "/api/train/start";
+      const opts = running
+        ? { method: "POST" }
+        : {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(collectStartOptions()),
+          };
+      const res = await fetch(path, opts);
+      const status = await res.json();
+      if (status.error) alert(status.error);
+      busy = false;
+      render(status);
+      refreshRuns();
+    } catch (e) {
+      busy = false;
+      alert("request failed: " + e);
+      refresh();
+    }
+  });
+
+  logToggle.addEventListener("click", () => {
+    logEl.classList.toggle("open");
+    logToggle.style.background = logEl.classList.contains("open") ? "var(--accent)" : "#30363d";
+    refresh();
+  });
+
+  refresh();
+  setInterval(refresh, 2000);
+}
+
 async function main() {
   const [imgBlobRes, mapDataRes] = await Promise.all([
     fetch("/assets/kanto_map.png"),
@@ -166,6 +334,9 @@ async function main() {
   view.y = (window.innerHeight - img.height * view.zoom) / 2;
 
   setupInput();
+  setupDrawers();
+  await loadConfigDefaults();
+  setupTrainControls();
   connect();
   draw();
 }

@@ -45,6 +45,28 @@ python -m pokemonred_puffer.train autotune   # find the right num_envs
 python -m pokemonred_puffer.train train
 ```
 
+### macOS
+
+On macOS the engine crashes immediately with the dashboard stuck at `SPS 0` and errors like
+`+[Swift.__SharedStringStorage initialize] may have been in progress ... Crashing instead`.
+Two macOS-specific things are needed:
+
+1. **Fork safety.** The engine forces the `fork` start method, which is unsafe once
+   PyTorch/PyBoy/SDL have loaded. Launch with `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` set.
+2. **Device.** There's no CUDA on a Mac, so set `train.device: cpu` (or `mps`) in the
+   engine's `config.yaml`; `cuda` raises `AssertionError: Torch not compiled with CUDA enabled`.
+
+A wrapper script in this repo sets the env var and runs the engine for you:
+
+```sh
+./train_macos.sh train          # ./train_macos.sh {train|autotune|...} [flags]
+./train_macos.sh train --debug  # quick single-env CPU smoke test
+```
+
+Note: on CPU, startup is slow — every env boots its own PyBoy emulator and `torch.compile`
+(`compile: True` in `config.yaml`) adds a one-time compile. Run `autotune` first to pick a
+sane `num_envs`, and consider `compile: False` on CPU.
+
 ## Running the Pretrained Model Interactively 🎮  
 🐍 Python 3.10+ is recommended. Other versions may work but have not been tested.   
 You also need to install ffmpeg and have it available in the command line.

@@ -181,7 +181,14 @@ const ENVS_PER_WORKER = 12; // mirrors server derive_env_layout
 function updateInstancesHint() {
   const n = parseInt($("cfg-instances").value, 10);
   $("cfg-instances-val").textContent = n;
-  $("cfg-instances-hint").textContent = `→ ${n * ENVS_PER_WORKER} environments (${ENVS_PER_WORKER}/worker). 10 is the autotuned sweet spot on this M4.`;
+  // RAM is the real limit on a 16GB machine (~350MB/instance + ~2GB trainer):
+  // past ~6 instances alongside normal apps, workers hit swap and env
+  // stepping collapses (measured: 8 instances → 25x slower per env).
+  const note = n <= 6
+    ? "fits alongside normal use"
+    : "dedicated machine only — swaps and crawls otherwise";
+  $("cfg-instances-hint").textContent =
+    `→ ${n * ENVS_PER_WORKER} environments (${ENVS_PER_WORKER}/worker) · ${note}`;
 }
 
 async function loadConfigDefaults() {

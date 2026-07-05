@@ -47,16 +47,16 @@ python -m pokemonred_puffer.train train
 
 ### macOS
 
-On macOS the engine crashes immediately with the dashboard stuck at `SPS 0` and errors like
-`+[Swift.__SharedStringStorage initialize] may have been in progress ... Crashing instead`.
 Two macOS-specific things are needed:
 
-1. **Fork safety.** The engine forces the `fork` start method, which is unsafe once
-   PyTorch/PyBoy/SDL have loaded. Launch with `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` set.
+1. **Spawn-safe workers.** macOS uses the `spawn` multiprocessing start method, and forking
+   instead (even with `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES`) intermittently kills worker
+   processes silently, leaving the run stuck at `SPS 0`. Our engine checkout patches
+   `train.py` so the env creator is picklable and spawn just works.
 2. **Device.** There's no CUDA on a Mac, so set `train.device: cpu` (or `mps`) in the
    engine's `config.yaml`; `cuda` raises `AssertionError: Torch not compiled with CUDA enabled`.
 
-A wrapper script in this repo sets the env var and runs the engine for you:
+A wrapper script in this repo runs the engine for you:
 
 ```sh
 ./train_macos.sh train          # ./train_macos.sh {train|autotune|...} [flags]

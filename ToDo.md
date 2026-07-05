@@ -17,6 +17,7 @@
 - [x] Per-env colored trails with fade; zoom/pan — implemented in `app.js` (TTL fade, hashed per-agent colors, cursor-anchored zoom).
 - [x] Milestone: watch a live local training run in the browser — closed 2026-07-05: 24-env run started via `POST /api/train/start`, per-agent colored trails visually confirmed rendering on the Kanto map canvas (12k points / 72 batches, header showing live status + run uptime).
 - [ ] Cosmetic: 24 envs show as 12 agents — spawned workers each number their envs 0–11, so `user/env_id` keys collide across workers. Add a worker-unique component (e.g. pid) to StreamWrapper metadata.
+- [ ] **Run health watchdog**: when a pufferlib env worker dies (e.g. an env exception), the main trainer spin-polls its semaphore forever at ~100% CPU and the run looks "running" with no data. RunManager should detect zombie children of the trainer pid (or "no batches for N min while running") and surface a "degraded/hung" state in the UI with a restart offer. Hit twice on 2026-07-05: fork-unsafe workers (fixed via spawn), then a PyBoy 2.7 crash — empty-bag zero-length memory slice in `rewards/baseline.py` (`numBagItems == 0`), now guarded in both reward classes in the engine checkout.
 
 ### How to run the live pipeline
 

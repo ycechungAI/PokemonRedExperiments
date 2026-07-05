@@ -1,11 +1,12 @@
 // Live training map: renders StreamWrapper coordinate batches relayed by
 // the telemetry server onto the full Kanto map with per-agent trails.
 
-// Global map grid used by the engine's global_map.py: 476 cols x 484 rows
-// of game tiles including a 20-tile pad on every side.
-const PAD = 20;
-const GRID_COLS = 436 + PAD * 2;
-const GRID_ROWS = 444 + PAD * 2;
+// map_data.json coordinates are tile positions on the stitched Kanto map
+// image, which is exactly 436 x 444 tiles at 16 px/tile (6976 x 7104 px).
+// Note: the engine's global_map.py adds a 20-tile PAD on top of these for its
+// internal exploration arrays — that pad does NOT apply to the image.
+const GRID_COLS = 436;
+const GRID_ROWS = 444;
 
 const TRAIL_TTL_MS = 60_000; // points fade out over a minute
 const MAX_POINTS_PER_AGENT = 2000;
@@ -44,8 +45,8 @@ function localToGlobal(x, y, mapN) {
   const region = regions[mapN];
   if (!region) return null;
   const [mapX, mapY] = region.coordinates;
-  const gx = x + mapX + PAD;
-  const gy = y + mapY + PAD;
+  const gx = x + mapX;
+  const gy = y + mapY;
   if (gx < 0 || gx >= GRID_COLS || gy < 0 || gy >= GRID_ROWS) return null;
   return [gx, gy];
 }
@@ -214,6 +215,26 @@ function collectStartOptions() {
   };
 }
 
+// Mirror the active run's parameters into the launch form so the config
+// drawer reflects reality (e.g. slider at 8 when an 8-instance run is live)
+// instead of the form defaults.
+let syncedRunId = null;
+
+function syncFormToRun(status) {
+  if (!status.running || !status.params || status.run_id === syncedRunId) return;
+  syncedRunId = status.run_id;
+  const p = status.params;
+  if (p.instances != null) {
+    $("cfg-instances").value = p.instances;
+    updateInstancesHint();
+  }
+  if (p.total_timesteps != null) $("cfg-total-timesteps").value = p.total_timesteps;
+  if (p.device) $("cfg-device").value = p.device;
+  if (p.wrappers_name) $("cfg-wrappers").value = p.wrappers_name;
+  if (p.reward_name) $("cfg-reward").value = p.reward_name;
+  if (p.debug != null) $("cfg-debug").checked = !!p.debug;
+}
+
 function statusClass(s) {
   return ["running", "stopped", "exited", "failed"].includes(s) ? s : "";
 }
@@ -287,6 +308,7 @@ function setupTrainControls() {
     try {
       const res = await fetch("/api/train/status");
       const status = await res.json();
+      syncFormToRun(status);
       render(status);
       // When the run state flips, refresh the history panel.
       if (status.running !== lastRunning) {

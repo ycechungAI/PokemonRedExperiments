@@ -19,6 +19,7 @@ let mapImage = null;
 let regions = null; // map_n -> {coordinates: [x, y]}
 const agents = new Map(); // agent key -> {color, points: [{gx, gy, t}]}
 let batches = 0;
+let lastBatchAt = null; // ms timestamp of the last received batch
 
 // px per tile, computed once the image loads
 let scaleX = 1;
@@ -65,7 +66,19 @@ function handleBatch(msg) {
     agent.points.splice(0, agent.points.length - MAX_POINTS_PER_AGENT);
   }
   batches++;
-  statsEl.textContent = `${agents.size} agents · ${batches} batches`;
+  // Use the batch's own timestamp so replayed history doesn't read as live.
+  lastBatchAt = Math.max(lastBatchAt ?? 0, t);
+}
+
+function updateStats() {
+  let text = `${agents.size} agents · ${batches} batches`;
+  if (lastBatchAt) {
+    const age = Math.round((Date.now() - lastBatchAt) / 1000);
+    // Envs upload every 500 steps, so gaps of a couple of minutes are normal
+    // during startup/compile; surface the age instead of a blank map.
+    text += age < 15 ? " · live data" : ` · last data ${age}s ago`;
+  }
+  statsEl.textContent = text;
 }
 
 function draw() {
@@ -83,10 +96,16 @@ function draw() {
   const now = Date.now();
   const r = Math.max(4, 0.45 * scaleX);
   for (const agent of agents.values()) {
-    agent.points = agent.points.filter((p) => now - p.t < TRAIL_TTL_MS);
+    // Expire old trail points, but always keep the newest one so each agent's
+    // last known position stays on the map through quiet spells (startup,
+    // torch.compile, long rollouts) instead of the map going blank.
+    if (agent.points.length > 1) {
+      const keep = agent.points.filter((p) => now - p.t < TRAIL_TTL_MS);
+      agent.points = keep.length ? keep : [agent.points[agent.points.length - 1]];
+    }
     ctx.fillStyle = agent.color;
     for (const p of agent.points) {
-      ctx.globalAlpha = Math.max(0.05, 1 - (now - p.t) / TRAIL_TTL_MS);
+      ctx.globalAlpha = Math.max(0.15, 1 - (now - p.t) / TRAIL_TTL_MS);
       ctx.beginPath();
       ctx.arc((p.gx + 0.5) * scaleX, (p.gy + 0.5) * scaleY, r, 0, Math.PI * 2);
       ctx.fill();
@@ -310,6 +329,7 @@ function setupTrainControls() {
 
   refresh();
   setInterval(refresh, 2000);
+  setInterval(updateStats, 1000);
 }
 
 async function main() {

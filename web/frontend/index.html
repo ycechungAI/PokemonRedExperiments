@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pokemon Red RL — Live Training Map</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #181b22;
+      --text: #e6e8ee;
+      --muted: #8a90a0;
+      --accent: #e3350d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+      overflow: hidden;
+    }
+    header {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 16px;
+      background: color-mix(in srgb, var(--panel) 85%, transparent);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid #262a33;
+      z-index: 10;
+    }
+    header h1 { font-size: 15px; font-weight: 600; margin: 0; }
+    header h1 span { color: var(--accent); }
+    #conn {
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #conn::before {
+      content: "";
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #666;
+      display: inline-block;
+    }
+    #conn.ok::before { background: #3fb950; }
+    #conn.err::before { background: var(--accent); }
+    #stats { margin-left: auto; font-size: 12px; color: var(--muted); }
+    #map { display: block; width: 100vw; height: 100vh; cursor: grab; }
+    #map.dragging { cursor: grabbing; }
+    #hint {
+      position: fixed;
+      bottom: 12px; left: 16px;
+      font-size: 12px;
+      color: var(--muted);
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Pokemon Red RL <span>●</span> Live Training Map</h1>
+    <div id="conn">connecting…</div>
+    <div id="stats"></div>
+  </header>
+  <canvas id="map"></canvas>
+  <div id="hint">drag to pan · scroll to zoom</div>
+  <script src="app.js"></script>
+</body>
+</html>

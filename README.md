@@ -1,11 +1,12 @@
 # Train RL agents to play Pokemon Red
 
+### 🌐 New! Browser-Based Training with pokemonred_puffer — see [Web Training](#web-training) below
 ### New 10-19-24! Updated & Simplified V2 Training Script - See V2 below
 ### New 1-29-24! - [Multiplayer Live Training Broadcast](https://github.com/pwhiddy/pokerl-map-viz/)  🎦 🔴 [View Here](https://pwhiddy.github.io/pokerl-map-viz/)
 Stream your training session to a shared global game map using the [Broadcast Wrapper](/baselines/stream_agent_wrapper.py)  
 
 See how in [Training Broadcast](#training-broadcast) section
-  
+
 ## Watch the Video on Youtube! 
 
 <p float="left">
@@ -19,7 +20,31 @@ See how in [Training Broadcast](#training-broadcast) section
 
 ## Join the discord server
 [![Join the Discord server!](https://invidget.switchblade.xyz/RvadteZk4G)](http://discord.gg/RvadteZk4G)
-  
+
+## Web Training
+
+This fork is building a **clean web interface for training**: the fast [pokemonred_puffer](https://github.com/drubinstein/pokemonred_puffer) engine runs on your machine (or a GPU box) while everything you touch lives in the browser — start/stop runs, edit configs, watch agents explore a live Kanto map, view env screens, and track reward/exploration metrics, with no terminal or tensorboard required.
+
+How it fits together:
+
+1. **Engine** — `pokemonred_puffer` (cloned as a sibling directory) trains with PufferLib-vectorized PyBoy environments; policies, rewards, and wrappers are plug-ins chosen in `config.yaml`.
+2. **Telemetry** — its built-in `StreamWrapper` already broadcasts agent coordinates over WebSocket (the same protocol behind the [community map](https://pwhiddy.github.io/pokerl-map-viz/)); we repoint it at a local FastAPI server.
+3. **Browser dashboard** — a single-page app served at `localhost:8000`: run control, live map with per-agent trails, screens, and charts.
+4. **Stretch** — a fully in-browser demo mode (ONNX policy + WASM Game Boy) for watching pretrained agents with zero install. Training itself always runs natively — PyTorch and PyBoy don't run in a browser tab.
+
+Read the full architecture in **[Plan.md](Plan.md)**, track progress in **[ToDo.md](ToDo.md)**, and see **[CLAUDE.md](CLAUDE.md)** for contributor/agent guidance.
+
+Quickstart for the engine (until the web launcher lands):
+
+```sh
+git clone https://github.com/drubinstein/pokemonred_puffer ../pokemonred_puffer
+pip install -e ../pokemonred_puffer   # Python 3.10–3.11
+# copy your legally obtained ROM to ../pokemonred_puffer/red.gb
+cd ../pokemonred_puffer
+python -m pokemonred_puffer.train autotune   # find the right num_envs
+python -m pokemonred_puffer.train train
+```
+
 ## Running the Pretrained Model Interactively 🎮  
 🐍 Python 3.10+ is recommended. Other versions may work but have not been tested.   
 You also need to install ffmpeg and have it available in the command line.
@@ -53,6 +78,9 @@ Note: the Pokemon.gb file MUST be in the main directory and your current directo
 
 <img src="/assets/grid.png?raw=true" height="156">
 
+### pokemonred_puffer (recommended)
+
+The fastest way to train is the [pokemonred_puffer](https://github.com/drubinstein/pokemonred_puffer) engine — see [Web Training](#web-training) above.
 
 ### V2
 

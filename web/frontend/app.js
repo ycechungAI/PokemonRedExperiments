@@ -297,6 +297,93 @@ function fmtMetric(v) {
   return typeof v === "number" ? (Number.isInteger(v) ? v.toLocaleString() : v.toFixed(3)) : v;
 }
 
+// Short hover descriptions for metric names. Losses are the engine's fixed
+// PPO loss terms (see cleanrl_puffer.py's Losses dataclass); stats are
+// reward/env-state counters and vary by reward set, so unknown keys fall
+// back to a generic description instead of going tooltip-less.
+const LOSS_DESCRIPTIONS = {
+  policy_loss: "PPO clipped surrogate objective — how much the policy is changing per update.",
+  value_loss: "Mean-squared error of the value function's return estimate.",
+  entropy: "Policy entropy — higher means more exploration/randomness in actions.",
+  old_approx_kl: "KL divergence estimate using the pre-update log-probs (cheap, biased).",
+  approx_kl: "KL divergence between the old and new policy after this update — large values mean the step was too aggressive.",
+  clipfrac: "Fraction of samples where PPO's probability ratio was clipped.",
+  explained_variance: "How well the value function predicts actual returns (1.0 = perfect, 0 = no better than the mean).",
+};
+
+// Exact-match descriptions for the engine's fixed environment.py stat keys
+// (see agent_stats() in pokemonred_puffer/environment.py). Nested dicts
+// (menu, safari_zone, exploration, events, reward, required/useful items)
+// get flattened to "parent/child" keys by pufferlib's unroll_nested_dict,
+// so those are matched by prefix instead — see STAT_PREFIX_DESCRIPTIONS.
+const STAT_DESCRIPTIONS = {
+  "stats/badge": "Number of gym badges obtained.",
+  "stats/max_map_progress": "Furthest map-progression milestone reached so far.",
+  "stats/party_count": "Current number of Pokemon in the party.",
+  "stats/hp": "HP fraction of the active/lead Pokemon.",
+  "stats/coord": "Total distinct tile coordinates visited (overall exploration coverage).",
+  "stats/warps": "Distinct warp tiles (doors/stairs) stepped on.",
+  "stats/a_press": "Distinct spots where the A button was pressed to interact.",
+  "stats/map_id": "Sum of distinct map IDs visited.",
+  "stats/npc": "Distinct NPCs seen/interacted with.",
+  "stats/hidden_obj": "Distinct hidden objects found.",
+  "stats/sign": "Distinct signs read.",
+  "stats/deaths": "Number of times the party has fainted (blacked out).",
+  "stats/healr": "Total HP healed over the episode.",
+  "stats/caught_pokemon": "Distinct Pokemon species caught.",
+  "stats/seen_pokemon": "Distinct Pokemon species seen (Pokedex entries).",
+  "stats/obtained_move_ids": "Distinct moves the party has learned.",
+  "stats/opponent_level": "Highest level opponent Pokemon encountered so far.",
+  "stats/taught_cut": "Whether the party knows the HM move Cut.",
+  "stats/taught_surf": "Whether the party knows the HM move Surf.",
+  "stats/taught_strength": "Whether the party knows the HM move Strength.",
+  "stats/cut_tiles": "Tiles where Cut has been used.",
+  "stats/valid_cut_coords": "Coordinates where using Cut was valid (hit a cuttable tile).",
+  "stats/invalid_cut_coords": "Coordinates where using Cut was wasted/invalid.",
+  "stats/valid_pokeflute_coords": "Coordinates where using the Poke Flute was valid.",
+  "stats/invalid_pokeflute_coords": "Coordinates where using the Poke Flute was wasted/invalid.",
+  "stats/valid_surf_coords": "Coordinates where using Surf was valid (hit water).",
+  "stats/invalid_surf_coords": "Coordinates where using Surf was wasted/invalid.",
+  "stats/blackout_check": "Map ID used to gate wild encounters near the last blackout.",
+  "stats/blackout_count": "Number of times the player has blacked out (all party fainted).",
+  "stats/item_count": "Number of items currently in the bag.",
+  "stats/reset_count": "Number of episode resets so far this run.",
+  "stats/pokecenter": "Distinct Pokemon Centers visited.",
+  "stats/pokecenter_heal": "Healing done specifically at Pokemon Centers.",
+  "stats/in_battle": "Whether the agent is currently in a battle.",
+  "stats/event": "Weighted reward accumulated from story/event-flag progress.",
+  "stats/max_steps": "Current max steps allowed per episode (can change with curriculum).",
+  "stats/required_count": "Combined count of required story events + required items still tracked.",
+  "stats/use_ball_count": "Poke Balls thrown/used.",
+  "stats/step": "Cumulative step counter, including steps from prior episode resets.",
+  "stats/last_action": "Index of the action taken on the most recent step.",
+  "stats/action_hist": "Histogram of action counts taken so far.",
+  reward_sum: "Total shaped reward for the step — the sum of every reward/* component below.",
+};
+
+const STAT_PREFIX_DESCRIPTIONS = [
+  ["stats/menu/", "How many times this in-game menu screen has been opened (a UI-literacy proxy)."],
+  ["stats/safari_zone/", "Steps taken in this Safari Zone area."],
+  ["stats/exploration/", "Fraction of this map tileset's coordinates that have been visited."],
+  ["stats/badge_", "Whether this specific gym badge has been obtained."],
+  ["events/", "Story/game-progress event flag (boolean) read from Pokemon Red's RAM."],
+  ["required_items/", "Whether this story-required item is currently in the bag."],
+  ["useful_items/", "Whether this optional-but-useful item is currently in the bag."],
+  ["reward/", "Weighted reward contribution from this component of the shaped reward function."],
+];
+
+function describeStat(key) {
+  if (STAT_DESCRIPTIONS[key]) return STAT_DESCRIPTIONS[key];
+  for (const [prefix, desc] of STAT_PREFIX_DESCRIPTIONS) {
+    if (key.startsWith(prefix)) return desc;
+  }
+  return `Reward/environment-state counter from the engine (reward set-specific): ${key}`;
+}
+
+function tipAttr(text) {
+  return `data-tip="${text.replace(/"/g, "&quot;")}"`;
+}
+
 async function refreshMetrics() {
   const panel = $("metrics-panel");
   if (!panel.classList.contains("open")) return;
@@ -330,14 +417,16 @@ async function refreshMetrics() {
   const lossesEl = $("m-losses");
   lossesEl.innerHTML = "";
   for (const [k, v] of Object.entries(latest.losses || {})) {
-    lossesEl.innerHTML += `<div class="metric-row"><span>${k}</span><span>${fmtMetric(v)}</span></div>`;
+    const tip = tipAttr(LOSS_DESCRIPTIONS[k] || `PPO loss term: ${k}`);
+    lossesEl.innerHTML += `<div class="metric-row"><span ${tip}>${k}</span><span>${fmtMetric(v)}</span></div>`;
   }
 
   const statsEl2 = $("m-stats");
   statsEl2.innerHTML = "";
   const statEntries = Object.entries(latest.stats || {}).sort(([a], [b]) => a.localeCompare(b));
   for (const [k, v] of statEntries) {
-    statsEl2.innerHTML += `<div class="metric-row"><span>${k}</span><span>${fmtMetric(v)}</span></div>`;
+    const tip = tipAttr(describeStat(k));
+    statsEl2.innerHTML += `<div class="metric-row"><span ${tip}>${k}</span><span>${fmtMetric(v)}</span></div>`;
   }
 }
 

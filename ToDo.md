@@ -17,7 +17,19 @@
 - [x] Per-env colored trails with fade; zoom/pan — implemented in `app.js` (TTL fade, hashed per-agent colors, cursor-anchored zoom).
 - [x] Milestone: watch a live local training run in the browser — closed 2026-07-05: 24-env run started via `POST /api/train/start`, per-agent colored trails visually confirmed rendering on the Kanto map canvas (12k points / 72 batches, header showing live status + run uptime).
 - [x] Env-ID collision fixed 2026-07-05: spawned workers each re-import RedGymEnv and get their own shared-memory env_id counter, so bare env_ids repeat across workers and the map merged different envs into one "agent" (dots appearing off any walkable path). StreamWrapper metadata now sends `"{pid}-{env_id}"`, giving every env a unique trail/color.
-- [ ] **Run health watchdog**: when a pufferlib env worker dies (e.g. an env exception), the main trainer spin-polls its semaphore forever at ~100% CPU and the run looks "running" with no data. RunManager should detect zombie children of the trainer pid (or "no batches for N min while running") and surface a "degraded/hung" state in the UI with a restart offer. Hit twice on 2026-07-05: fork-unsafe workers (fixed via spawn), then a PyBoy 2.7 crash — empty-bag zero-length memory slice in `rewards/baseline.py` (`numBagItems == 0`), now guarded in both reward classes in the engine checkout.
+- [x] **Run health watchdog** — done 2026-07-05: `RunManager.health()` classifies the active run
+      as ok / warming / degraded from two signals: zombie (defunct) children of the trainer pid
+      (psutil — a dead spawn worker lingers unreaped while pufferlib keeps polling) and telemetry
+      silence (`last_batch_at` tracked in `app.py` on every `/broadcast` ingest, compared against
+      the run's own start time so a previous run's batches don't count). Grace windows are
+      deliberately generous — 15 min for warmup (8 instances measured ~8 min to first batch on CPU)
+      and 10 min for stalls (envs pause ~5 min during each PPO train phase) — so healthy quiet
+      spells don't false-alarm; this exact pattern (trainer at 217% CPU, workers idle, 4-min
+      silence, then batches resume) was observed healthy on a 218-min run. Surfaced via
+      `GET /api/train/status` (`health`, `health_reason`) and shown orange in the header
+      (`⚠ no data for N min…` / `N worker process(es) died…`). The watchdog originally motivated
+      by: fork-unsafe workers (fixed via spawn), then a PyBoy 2.7 empty-bag slice crash (guarded
+      in the engine checkout). Note: the running server picks this up on its next restart.
 
 ### How to run the live pipeline
 

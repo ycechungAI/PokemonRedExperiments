@@ -297,6 +297,7 @@ function setupTrainControls() {
 
   function render(status) {
     running = !!status.running;
+    stateEl.classList.remove("degraded");
     btn.textContent = running ? "Stop" : "Train";
     btn.classList.toggle("stop", running);
     btn.disabled = busy;
@@ -304,7 +305,12 @@ function setupTrainControls() {
       stateEl.textContent = running ? "stopping…" : "starting…";
     } else if (running) {
       const up = status.uptime_seconds ?? 0;
-      stateEl.textContent = `running · ${Math.floor(up / 60)}m${Math.floor(up % 60)}s`;
+      let text = `running · ${Math.floor(up / 60)}m${Math.floor(up % 60)}s`;
+      // Server-side watchdog: zombie workers or telemetry silence past the
+      // grace windows. Without this the run reads "running" while dead.
+      if (status.health === "degraded") text += ` · ⚠ ${status.health_reason}`;
+      stateEl.textContent = text;
+      stateEl.classList.toggle("degraded", status.health === "degraded");
     } else if (status.returncode != null) {
       stateEl.textContent = `exited (${status.returncode})`;
     } else {

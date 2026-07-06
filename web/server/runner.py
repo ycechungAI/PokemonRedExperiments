@@ -32,6 +32,26 @@ STOP_GRACE_SECONDS = 20.0
 # (= num_envs) % (num_envs/workers) == 0.
 ENVS_PER_WORKER = 12
 
+# Health thresholds. Healthy runs go quiet for long stretches: on CPU the envs
+# take minutes to boot (8 instances measured ~8 min to the first batch) and
+# pause entirely during each PPO train phase (~5 min observed at 4 instances),
+# so anything tighter than this false-alarms on runs that are actually fine.
+WARMUP_GRACE_SECONDS = 15 * 60
+STALL_GRACE_SECONDS = 10 * 60
+
+
+def _zombie_children(pid: int) -> int:
+    """Count defunct children of the trainer — dead spawn workers linger as
+    zombies while pufferlib's main process keeps polling as if all is well."""
+    try:
+        import psutil
+
+        return sum(
+            1 for c in psutil.Process(pid).children() if c.status() == psutil.STATUS_ZOMBIE
+        )
+    except Exception:
+        return 0
+
 
 def derive_env_layout(instances: int) -> dict[str, int]:
     """Map an 'instances' (worker) count to a valid num_envs/workers/batch trio."""
@@ -123,6 +143,51 @@ class RunManager:
             "returncode": returncode,
             "log": self.tail_log(40),
         }
+
+    def health(self, last_batch_at: Optional[float]) -> dict:
+        """Classify the active run as ok / warming / degraded.
+
+        The failure this catches: an env worker dies (env exception, fork
+        accident) and the trainer spin-polls at "running" forever with no
+        data — hit twice on 2026-07-05. Signals: zombie children of the
+        trainer, or telemetry silence beyond the grace windows.
+        ``last_batch_at`` is the server's wall-clock time of the newest
+        ingested coordinate batch (from any run — compared against this
+        run's start so a previous run's data doesn't count).
+        """
+        if not self.is_running():
+            return {"health": None, "health_reason": None}
+        assert self._proc is not None and self._started_at is not None
+        zombies = _zombie_children(self._proc.pid)
+        if zombies:
+            return {
+                "health": "degraded",
+                "health_reason": (
+                    f"{zombies} worker process(es) died — the run won't produce data; "
+                    "stop and restart it"
+                ),
+            }
+        now = time.time()
+        if last_batch_at is None or last_batch_at < self._started_at:
+            if now - self._started_at > WARMUP_GRACE_SECONDS:
+                return {
+                    "health": "degraded",
+                    "health_reason": (
+                        f"no telemetry {int((now - self._started_at) / 60)} min after start — "
+                        "check the log; the run is likely hung"
+                    ),
+                }
+            return {"health": "warming", "health_reason": None}
+        age = now - last_batch_at
+        if age > STALL_GRACE_SECONDS:
+            return {
+                "health": "degraded",
+                "health_reason": (
+                    f"no data for {int(age / 60)} min — longer than a normal train phase; "
+                    "the trainer may be hung"
+                ),
+            }
+        return {"health": "ok", "health_reason": None}
 
     def tail_log(self, lines: int = 100) -> list[str]:
         if not self._log_path or not self._log_path.exists():

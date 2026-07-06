@@ -40,6 +40,8 @@ app = FastAPI(title="pokerl-web telemetry")
 live_clients: set[WebSocket] = set()
 replay: deque[str] = deque(maxlen=REPLAY_SIZE)
 runs = RunManager()
+# Wall-clock time of the newest ingested batch; feeds the run-health watchdog.
+last_batch_at: float | None = None
 
 
 @app.on_event("shutdown")
@@ -63,6 +65,7 @@ async def fan_out(message: str) -> None:
 @app.websocket("/broadcast")
 async def broadcast(ws: WebSocket) -> None:
     """Ingest endpoint for StreamWrapper (one connection per environment)."""
+    global last_batch_at
     await ws.accept()
     try:
         while True:
@@ -71,7 +74,8 @@ async def broadcast(ws: WebSocket) -> None:
                 payload = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-            message = json.dumps({"ts": time.time(), **payload})
+            last_batch_at = time.time()
+            message = json.dumps({"ts": last_batch_at, **payload})
             replay.append(message)
             await fan_out(message)
     except WebSocketDisconnect:
@@ -147,7 +151,7 @@ async def config_defaults() -> dict:
 
 @app.get("/api/train/status")
 async def train_status() -> dict:
-    return runs.status()
+    return {**runs.status(), **runs.health(last_batch_at)}
 
 
 @app.post("/api/train/start")

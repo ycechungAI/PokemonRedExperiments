@@ -273,8 +273,80 @@ async function refreshRuns() {
   }
 }
 
+function drawSparkline(canvasEl, values) {
+  const w = (canvasEl.width = canvasEl.clientWidth * devicePixelRatio);
+  const h = (canvasEl.height = canvasEl.clientHeight * devicePixelRatio);
+  const c = canvasEl.getContext("2d");
+  c.clearRect(0, 0, w, h);
+  if (values.length < 2) return;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  c.strokeStyle = "#e3350d";
+  c.lineWidth = 1.5 * devicePixelRatio;
+  c.beginPath();
+  values.forEach((v, i) => {
+    const x = (i / (values.length - 1)) * w;
+    const y = h - ((v - min) / span) * (h - 4 * devicePixelRatio) - 2 * devicePixelRatio;
+    i === 0 ? c.moveTo(x, y) : c.lineTo(x, y);
+  });
+  c.stroke();
+}
+
+function fmtMetric(v) {
+  return typeof v === "number" ? (Number.isInteger(v) ? v.toLocaleString() : v.toFixed(3)) : v;
+}
+
+async function refreshMetrics() {
+  const panel = $("metrics-panel");
+  if (!panel.classList.contains("open")) return;
+  let latest, history;
+  try {
+    [latest, history] = await Promise.all([
+      (await fetch("/api/metrics/latest")).json(),
+      (await fetch("/api/metrics/history")).json(),
+    ]);
+  } catch { return; }
+
+  const empty = $("metrics-empty");
+  const body = $("metrics-body");
+  if (!latest || latest.global_step == null) {
+    empty.style.display = "block";
+    body.style.display = "none";
+    return;
+  }
+  empty.style.display = "none";
+  body.style.display = "block";
+
+  $("m-steps").textContent = fmtMetric(latest.global_step);
+  $("m-epoch").textContent = fmtMetric(latest.epoch);
+  $("m-sps").textContent = fmtMetric(Math.round(latest.sps));
+  const up = latest.uptime || 0;
+  $("m-uptime").textContent = `${Math.floor(up / 60)}m${Math.floor(up % 60)}s`;
+
+  const points = history.points || [];
+  drawSparkline($("sps-sparkline"), points.map((p) => p.sps));
+
+  const lossesEl = $("m-losses");
+  lossesEl.innerHTML = "";
+  for (const [k, v] of Object.entries(latest.losses || {})) {
+    lossesEl.innerHTML += `<div class="metric-row"><span>${k}</span><span>${fmtMetric(v)}</span></div>`;
+  }
+
+  const statsEl2 = $("m-stats");
+  statsEl2.innerHTML = "";
+  const statEntries = Object.entries(latest.stats || {}).sort(([a], [b]) => a.localeCompare(b));
+  for (const [k, v] of statEntries) {
+    statsEl2.innerHTML += `<div class="metric-row"><span>${k}</span><span>${fmtMetric(v)}</span></div>`;
+  }
+}
+
 function setupDrawers() {
-  const pairs = [["config-toggle", "config-panel"], ["runs-toggle", "runs-panel"]];
+  const pairs = [
+    ["config-toggle", "config-panel"],
+    ["metrics-toggle", "metrics-panel"],
+    ["runs-toggle", "runs-panel"],
+  ];
   for (const [btnId, panelId] of pairs) {
     $(btnId).addEventListener("click", () => {
       const panel = $(panelId);
@@ -283,6 +355,7 @@ function setupDrawers() {
       panel.classList.toggle("open");
       $(btnId).style.background = panel.classList.contains("open") ? "var(--accent)" : "#30363d";
       if (panelId === "runs-panel") refreshRuns();
+      if (panelId === "metrics-panel") refreshMetrics();
     });
   }
 }
@@ -406,6 +479,7 @@ async function main() {
   setupTrainControls();
   connect();
   draw();
+  setInterval(refreshMetrics, 3000);
 }
 
 main();

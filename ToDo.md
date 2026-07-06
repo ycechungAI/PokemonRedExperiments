@@ -75,8 +75,34 @@ Terminal 2 — training that streams to the local server (add `--debug` for a qu
       stop, and review history all from the page.
 
 ## Phase 3 — Metrics & screens
-- [ ] Spike: parse wandb offline dir vs tensorboard event files; pick one
-- [ ] Push parsed metrics over `/live`; charts for reward components, episode stats, badges/events, exploration
+- [x] **Spike: parse wandb offline dir vs tensorboard event files; pick one** — done 2026-07-05:
+      neither applies. The engine only supports wandb, gated behind `--track` (default off) and
+      requiring `wandb.project`/`entity` set; there's no tensorboard integration at all. With
+      `track=False` (our local default), `self.stats`/`self.losses` are computed every epoch but
+      only ever reach a Rich-rendered console dashboard (`print_dashboard` — ANSI, redrawn in
+      place, not reliably scrapable from a captured log). Decision: skip both and add a third,
+      simpler local sink instead of parsing either.
+- [x] **Push parsed metrics over local HTTP; numeric panel + SPS sparkline for reward components,
+      losses, SPS, agent steps** — done 2026-07-05. Engine patch (`cleanrl_puffer.py`, see
+      [[engine-local-patches]]): `CleanPuffeRL` gained `_push_local_metrics()`, called from the
+      same per-epoch block as the wandb log (decoupled from `wandb_client is not None` so it fires
+      whether or not wandb is enabled), gated on `config.train.metrics_address` being set (absent
+      on a plain engine checkout → no-op) and throttled to one push / 5s. Payload: global_step,
+      epoch, sps, uptime, `stats` (numeric-only filter — wandb.Image/Table entries only exist when
+      `wandb_client` is set, so this is defensive, not load-bearing), and the 7 `Losses` fields.
+      Sent via stdlib `urllib.request` (no new dependency), swallowing all exceptions (a dashboard
+      hiccup must never interrupt training). Server: `POST /api/metrics/ingest`,
+      `GET /api/metrics/latest`, `GET /api/metrics/history` (720-point ring buffer, ~1h at one
+      point/5s) in `app.py`; cleared on every `/api/train/start` so a new run doesn't show stale
+      numbers. Frontend: a "metrics" drawer (`app.js` `refreshMetrics`, polled every 3s while open)
+      showing agent steps/epoch/SPS/uptime, an SPS sparkline (plain canvas, no charting library —
+      consistent with the "no framework" decision), and full losses/stats tables.
+      **Caveat found in testing**: a full epoch needs the experience buffer (`batch_size`, now
+      16384 post-resource-fix) to fill across all envs before the first push fires — at 48 envs on
+      this CPU this took several minutes in one test, not seconds. That's expected (matches the
+      previously-documented multi-minute quiet spells during real PPO train phases,
+      [[m4-training-capacity]]), not a pipeline bug — verified the ingest/latest/history endpoints
+      work correctly with a synthetic payload while waiting for the engine's own first real push.
 - [ ] Frame-publisher wrapper (throttled JPEG env screens, opt-in per run)
 - [ ] Env screen tile grid in the UI
 - [ ] Run comparison view (overlay metrics from two runs)

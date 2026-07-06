@@ -43,6 +43,15 @@ runs = RunManager()
 # Wall-clock time of the newest ingested batch; feeds the run-health watchdog.
 last_batch_at: float | None = None
 
+# Training metrics (SPS, agent steps, losses, reward-component stats), pushed
+# by the engine's local metrics sink (see cleanrl_puffer.py's
+# _push_local_metrics — an engine patch, this repo has no wandb/tensorboard
+# account for the engine's own logging to go to). One snapshot every ~5s;
+# history is kept for a simple in-page chart, not full offline analysis.
+METRICS_HISTORY_SIZE = 720  # ~1 hour at one point per 5s
+latest_metrics: dict | None = None
+metrics_history: deque[dict] = deque(maxlen=METRICS_HISTORY_SIZE)
+
 
 @app.on_event("shutdown")
 def _stop_training_on_shutdown() -> None:
@@ -156,7 +165,12 @@ async def train_status() -> dict:
 
 @app.post("/api/train/start")
 async def train_start(req: StartRequest) -> dict:
+    global latest_metrics
     try:
+        # Clear stale metrics from a previous run before the new one's first
+        # push arrives, so the panel doesn't show old numbers as "current".
+        latest_metrics = None
+        metrics_history.clear()
         return runs.start(
             command=req.command,
             device=req.device,
@@ -187,6 +201,37 @@ async def list_runs(limit: int = 50) -> dict:
 async def get_run(run_id: str) -> dict:
     record = runs.registry.get_run(run_id)
     return record or {"error": "run not found"}
+
+
+# --- training metrics (SPS, losses, reward stats) --------------------------
+
+
+class MetricsPayload(BaseModel):
+    global_step: int
+    epoch: int
+    sps: float
+    uptime: float
+    stats: dict
+    losses: dict
+
+
+@app.post("/api/metrics/ingest")
+async def metrics_ingest(payload: MetricsPayload) -> dict:
+    global latest_metrics
+    entry = {"ts": time.time(), **payload.model_dump()}
+    latest_metrics = entry
+    metrics_history.append(entry)
+    return {"ok": True}
+
+
+@app.get("/api/metrics/latest")
+async def metrics_latest() -> dict:
+    return latest_metrics or {}
+
+
+@app.get("/api/metrics/history")
+async def metrics_history_endpoint() -> dict:
+    return {"points": list(metrics_history)}
 
 
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

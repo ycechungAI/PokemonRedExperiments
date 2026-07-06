@@ -24,6 +24,7 @@ from .registry import Registry
 RUNS_DIR = Path(__file__).resolve().parent / ".runs"
 ENGINE_RUNS_DIR = ENGINE_DIR / "runs"
 WS_ADDRESS = "ws://localhost:8000/broadcast"
+METRICS_ADDRESS = "http://localhost:8000/api/metrics/ingest"
 STOP_GRACE_SECONDS = 20.0
 
 # Envs per worker, from autotune (peak was 120 envs / 10 workers = 12/worker).
@@ -31,6 +32,24 @@ STOP_GRACE_SECONDS = 20.0
 # satisfied for any worker count: num_envs % workers == 0, and env_batch_size
 # (= num_envs) % (num_envs/workers) == 0.
 ENVS_PER_WORKER = 12
+
+# config.yaml's batch_size/minibatch_size (65536/2048) are GPU-box defaults.
+# On this 16GB M4 they size the trainer's experience buffer to ~2.25GB RSS —
+# the single biggest memory consumer on the machine, worse than all 4 env
+# workers combined — which pushes the box into swap during warmup. These are
+# 1/4 scale, kept a multiple of bptt_horizon (16) for the engine's rollout
+# reshaping: 1024 / 16 = 64 rows, 16384 / 1024 = 16 minibatches.
+CPU_BATCH_SIZE = 16384
+CPU_MINIBATCH_SIZE = 1024
+
+# Cap the trainer's CPU-side thread pool (torch reads OMP/MKL env vars at
+# import) so it doesn't contend with the env-stepping workers for cores.
+# Measured 2026-07-05: trainer alone hit 340% CPU on a 10-core machine while
+# 4 workers sat idle waiting for it. Leave a couple of cores as headroom.
+def _trainer_thread_cap(num_workers: int) -> int:
+    total = os.cpu_count() or 4
+    return max(2, min(6, total - num_workers))
+
 
 # Health thresholds. Healthy runs go quiet for long stretches: on CPU the envs
 # take minutes to boot (8 instances measured ~8 min to the first batch) and
@@ -229,8 +248,12 @@ class RunManager:
             "num_workers": num_workers,
             "env_batch_size": env_batch_size,
             "total_timesteps": total_timesteps,
+            # Right-size the experience buffer for this machine instead of the
+            # engine's GPU-box defaults (65536/2048) — see CPU_BATCH_SIZE.
+            "batch_size": CPU_BATCH_SIZE,
+            "minibatch_size": CPU_MINIBATCH_SIZE,
         }
-        run_config = build_local_config(WS_ADDRESS, train_overrides)
+        run_config = build_local_config(WS_ADDRESS, train_overrides, metrics_address=METRICS_ADDRESS)
 
         self._run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
         run_dir = RUNS_DIR / self._run_id
@@ -250,6 +273,10 @@ class RunManager:
         # macOS: the engine forces the fork start method, unsafe once torch/PyBoy/SDL
         # have initialized the ObjC runtime. See train_macos.sh / README macOS section.
         env["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+        thread_cap = str(_trainer_thread_cap(num_workers or 1))
+        env["OMP_NUM_THREADS"] = thread_cap
+        env["MKL_NUM_THREADS"] = thread_cap
+        env["VECLIB_MAXIMUM_THREADS"] = thread_cap
 
         cmd = [str(PYTHON), "-m", "pokemonred_puffer.train", command, "--config", str(run_config)]
         if wrappers_name:

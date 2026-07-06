@@ -38,10 +38,22 @@ RUN_CONFIG = REPO_DIR / "web" / "server" / ".run_config.yaml"
 STREAM_WRAPPER_KEY = "stream_wrapper.StreamWrapper"
 
 # config.train keys the web form is allowed to override.
-TRAIN_OVERRIDE_KEYS = ("device", "num_envs", "num_workers", "env_batch_size", "total_timesteps")
+TRAIN_OVERRIDE_KEYS = (
+    "device",
+    "num_envs",
+    "num_workers",
+    "env_batch_size",
+    "total_timesteps",
+    "batch_size",
+    "minibatch_size",
+)
 
 
-def build_local_config(ws_address: str, train_overrides: Optional[dict[str, Any]] = None) -> Path:
+def build_local_config(
+    ws_address: str,
+    train_overrides: Optional[dict[str, Any]] = None,
+    metrics_address: Optional[str] = None,
+) -> Path:
     """Load the engine config, overlay local values, and write a run config.
 
     ``train_overrides`` maps ``config.train`` keys (a subset of
@@ -52,6 +64,12 @@ def build_local_config(ws_address: str, train_overrides: Optional[dict[str, Any]
         sys.exit(f"error: engine config not found at {ENGINE_CONFIG}")
 
     config = OmegaConf.load(ENGINE_CONFIG)
+
+    # This repo has no wandb/tensorboard account for the engine's metrics to
+    # go to; point CleanPuffeRL's local metrics sink (engine patch, see
+    # engine-local-patches memory) at our own server instead.
+    if metrics_address:
+        config.train.metrics_address = metrics_address
 
     # Point every StreamWrapper (across all wrapper sets) at the local server,
     # and upload more often than the public-map default (500 steps) so the
@@ -100,13 +118,20 @@ def main() -> None:
         default=None,
         help="Override train.num_envs. Defaults to config.yaml.",
     )
+    parser.add_argument(
+        "--metrics-address",
+        default="http://localhost:8000/api/metrics/ingest",
+        help="Local metrics sink target (default: the local telemetry server)",
+    )
     args, engine_args = parser.parse_known_args()
 
     if not PYTHON.exists():
         sys.exit(f"error: {PYTHON} not found — create the venv and install the engine first")
 
     run_config = build_local_config(
-        args.ws_address, {"device": args.device, "num_envs": args.num_envs}
+        args.ws_address,
+        {"device": args.device, "num_envs": args.num_envs},
+        metrics_address=args.metrics_address,
     )
     print(f"[local_train] merged run config: {run_config}", file=sys.stderr)
     print(f"[local_train] streaming telemetry to: {args.ws_address}", file=sys.stderr)

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "telemetry-server",
+      "runtimeExecutable": ".venv/bin/uvicorn",
+      "runtimeArgs": ["web.server.app:app", "--host", "127.0.0.1", "--port", "8000"],
+      "port": 8000
+    }
+  ]
+}

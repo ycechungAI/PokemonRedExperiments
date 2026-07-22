@@ -12,3 +12,7 @@ session_*
 PokemonRed.gb.state
 venv*
 .python-version
+.venv
+runs
+web/server/.run_config.yaml
+web/server/.runs/
